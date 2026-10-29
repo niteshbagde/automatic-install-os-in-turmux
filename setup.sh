@@ -15,12 +15,13 @@ if [ ! -f "$CONF" ]; then cat > "$CONF" <<'C'
 #WIN_CORES=4
 #WIN_DISK=32G
 #WIN_ARCH=amd64     # use x86 for 32-bit ISOs
+#CLEAN_ON_INSTALL=1  # 1 = remove any previous install before installing
 #UNATTENDED=1       # 1 = auto-answer Windows setup (user "User", password "User")
 C
 fi
 # shellcheck disable=SC1090
 . "$CONF"
-: "${ISO_URL:=}" "${WIN_RAM:=2048}" "${WIN_CORES:=4}" "${WIN_DISK:=32G}" "${WIN_ARCH:=amd64}" "${UNATTENDED:=1}"
+: "${CLEAN_ON_INSTALL:=1}" "${ISO_URL:=}" "${WIN_RAM:=2048}" "${WIN_CORES:=4}" "${WIN_DISK:=32G}" "${WIN_ARCH:=amd64}" "${UNATTENDED:=1}"
 
 log()   { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
@@ -78,10 +79,30 @@ start_audio() {
     --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" 2>/dev/null
 }
 
+# ---------------------------------------------------------------- CLEAN
+clean_linux() {
+  log "Removing old Linux install"
+  pkill -f startxfce4 2>/dev/null; pkill -f "proot" 2>/dev/null
+  proot-distro remove debian >/dev/null 2>&1
+  rm -rf "$ROOT" "$PREFIX"/var/lib/proot-distro/dlcache/debian* "$HOME/start-desktop.sh" "$HOME/termux-x11.apk" 2>/dev/null
+}
+clean_windows() {
+  log "Removing old Windows VM files (ISOs are kept)"
+  pkill -f qemu-system 2>/dev/null
+  find "$WIN" -type f ! -name '*.iso' -delete 2>/dev/null
+  rm -rf "$SHARE"; mkdir -p "$WIN" "$SHARE"
+}
+clean_all() {
+  clean_linux; clean_windows
+  rm -rf "$LAB" "$HOME"/*.part 2>/dev/null; mkdir -p "$LAB"
+  log "Clean done"
+}
+
 # ---------------------------------------------------------------- LINUX
 ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/debian"
 
 install_linux() {
+  [ "$CLEAN_ON_INSTALL" = 1 ] && clean_linux
   prep_termux || { warn "Termux prep failed (network?)"; return 1; }
   if [ ! -d "$ROOT/etc" ]; then
     log "Installing Debian rootfs"
@@ -167,6 +188,7 @@ XML
 }
 
 install_windows() {
+  [ "$CLEAN_ON_INSTALL" = 1 ] && clean_windows
   prep_termux || { warn "Termux prep failed (network?)"; return 1; }
   log "Installing QEMU"
   command -v qemu-system-x86_64 >/dev/null || retry aptq install qemu-system-x86-64 qemu-utils \
@@ -213,6 +235,7 @@ menu() {
   3) Install BOTH
   4) Start Linux desktop
   5) Start Windows VM
+  6) Remove everything (old installs + files)
   q) Quit
 M
     printf ' Choose: '; read -rn1 c </dev/tty; echo
@@ -222,6 +245,7 @@ M
       3) install_linux; install_windows && { run_linux & sleep 1; run_windows; } ;;
       4) run_linux ;;
       5) run_windows ;;
+      6) clean_all ;;
       q|Q) exit 0 ;;
     esac
     printf '\nPress any key...'; read -rn1 _ </dev/tty
@@ -235,5 +259,6 @@ case "${1:-menu}" in
   both)        install_linux; install_windows && run_windows ;;
   run-linux)   run_linux ;;
   run-windows) run_windows ;;
-  *) echo "usage: bash setup.sh [menu|linux|windows|both|run-linux|run-windows]" ;;
+  clean)       clean_all ;;
+  *) echo "usage: bash setup.sh [menu|linux|windows|both|run-linux|run-windows|clean]" ;;
 esac
